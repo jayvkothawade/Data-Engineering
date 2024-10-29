@@ -1,0 +1,76 @@
+
+
+log_data_path = "dbfs:/FileStore/apache_logs.txt"
+raw_data = spark.read.text(log_data_path)
+
+raw_data.show(truncate=False)
+
+from pyspark.sql.functions import regexp_extract
+
+# Update the log pattern to use numbered groups instead of named groups
+log_pattern = r'^(\S+) - - \[(.*?)\] "(\S+) (\S+) (\S+)" (\d{3}) (\d+) "(.*?)" "(.*?)"'
+
+# Assuming you have a DataFrame `logs_df` with a column named 'value' containing the log lines
+parsed_logs_df = raw_data.select(
+    regexp_extract('value', log_pattern, 1).alias('ip'),
+    regexp_extract('value', log_pattern, 2).alias('timestamp'),
+    regexp_extract('value', log_pattern, 3).alias('method'),
+    regexp_extract('value', log_pattern, 4).alias('url'),
+    regexp_extract('value', log_pattern, 5).alias('protocol'),
+    regexp_extract('value', log_pattern, 6).alias('status'),
+    regexp_extract('value', log_pattern, 7).alias('size'),
+    regexp_extract('value', log_pattern, 8).alias('referrer'),
+    regexp_extract('value', log_pattern, 9).alias('user_agent')
+)
+
+# Show the parsed DataFrame
+parsed_logs_df.show(truncate=False)
+
+parsed_logs_df.printSchema()
+
+
+from pyspark.sql.functions import to_timestamp
+
+# Clean the DataFrame
+cleaned_logs_df = parsed_logs_df.filter(parsed_logs_df.status.isNotNull())
+
+# Convert timestamp to a timestamp type
+cleaned_logs_df = cleaned_logs_df.withColumn('timestamp', to_timestamp('timestamp', 'dd/MMM/yyyy:HH:mm:ss Z'))
+
+cleaned_logs_df.show(truncate=False)
+
+
+total=cleaned_logs_df.count()
+print(total)
+
+
+#Count Requests by IP Address
+
+ip_counts_df = cleaned_logs_df.groupBy('ip').count().orderBy('count', ascending=False)
+ip_counts_df.show(5, truncate=False)
+
+# Count Response Status Codes
+
+status_counts_df = cleaned_logs_df.groupBy('status').count().orderBy('count', ascending=False)
+status_counts_df.show(truncate=False)
+
+#Total Response Size by URL
+
+url_size_df = cleaned_logs_df.groupBy('url').agg({'size': 'sum'}).withColumnRenamed('sum(size)', 'total_size')
+url_size_df.show(truncate=False)
+
+#Store the cleaned and analyzed data
+
+output_path = "dbfs:/FileStore/cleaned_logs.parquet"
+cleaned_logs_df.write.parquet(output_path)
+
+status_counts_output_path = "dbfs:/FileStore/status_counts.parquet"
+status_counts_df.write.parquet(status_counts_output_path)
+
+url_size_output_path = "dbfs:/FileStore/url_sizes.parquet"
+url_size_df.write.parquet(url_size_output_path)
+
+# Some null but not null blank values in DF
+
+num=cleaned_logs_df.filter(cleaned_logs_df.ip.isin('')).count()
+print(num)
