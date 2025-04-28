@@ -1,4 +1,4 @@
-Project: Scalable Server Log Analysis Using PySpark and Delta Lake
+Project: Scalable Server Log Analysis Using PySpark and Delta Lake.
 Overview:
 Designed and implemented a scalable server log analysis pipeline using PySpark on Databricks, focusing on parsing, cleaning, optimizing, and analyzing web server logs. The project demonstrates efficient big data handling, quality checks, and reliable storage for downstream analytics.
 
