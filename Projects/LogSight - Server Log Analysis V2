@@ -1,0 +1,90 @@
+# 1. Read the raw log data
+log_data_path = "dbfs:/FileStore/apache_logs.txt"
+raw_data = spark.read.text(log_data_path)
+
+# Show sample raw data
+raw_data.show(truncate=False)
+
+# 2. Parse the logs using Regular Expression
+from pyspark.sql.functions import regexp_extract
+
+# Define Log Pattern
+log_pattern = r'^(\S+) - - \[(.*?)\] "(\S+) (\S+) (\S+)" (\d{3}) (\d+) "(.*?)" "(.*?)"'
+
+# Extract fields into columns
+parsed_logs_df = raw_data.select(
+    regexp_extract('value', log_pattern, 1).alias('ip'),
+    regexp_extract('value', log_pattern, 2).alias('timestamp'),
+    regexp_extract('value', log_pattern, 3).alias('method'),
+    regexp_extract('value', log_pattern, 4).alias('url'),
+    regexp_extract('value', log_pattern, 5).alias('protocol'),
+    regexp_extract('value', log_pattern, 6).alias('status'),
+    regexp_extract('value', log_pattern, 7).alias('size'),
+    regexp_extract('value', log_pattern, 8).alias('referrer'),
+    regexp_extract('value', log_pattern, 9).alias('user_agent')
+)
+
+# Show parsed data
+parsed_logs_df.show(truncate=False)
+
+# 3. Data Cleaning and Quality Checks
+from pyspark.sql.functions import to_timestamp, col
+
+# Filter out records where critical fields are missing
+cleaned_logs_df = parsed_logs_df.filter(
+    (col('status').isNotNull()) &
+    (col('ip') != '') &
+    (col('timestamp').isNotNull())
+)
+
+# Convert timestamp string to TimestampType
+cleaned_logs_df = cleaned_logs_df.withColumn('timestamp', to_timestamp('timestamp', 'dd/MMM/yyyy:HH:mm:ss Z'))
+
+# Identify Bad Records (for audit)
+bad_records_df = parsed_logs_df.filter(
+    (col('ip') == '') | (col('status').isNull())
+)
+
+# Save bad records separately
+bad_records_df.write.mode('overwrite').parquet("dbfs:/FileStore/bad_records.parquet")
+
+# 4. Performance Optimization
+# Cache and Repartition
+cleaned_logs_df = cleaned_logs_df.repartition(8).cache()
+
+# Show cleaned data
+cleaned_logs_df.show(5, truncate=False)
+
+# 5. Basic Analytics
+
+# 5.1 Total Requests
+total_requests = cleaned_logs_df.count()
+print(f"Total Valid Requests: {total_requests}")
+
+# 5.2 Top IPs by Request Count
+ip_counts_df = cleaned_logs_df.groupBy('ip').count().orderBy('count', ascending=False)
+ip_counts_df.show(5)
+
+# 5.3 Response Status Counts
+status_counts_df = cleaned_logs_df.groupBy('status').count().orderBy('count', ascending=False)
+status_counts_df.show()
+
+# 5.4 Total Response Size by URL
+url_size_df = cleaned_logs_df.groupBy('url').agg({'size': 'sum'}).withColumnRenamed('sum(size)', 'total_size')
+url_size_df.orderBy('total_size', ascending=False).show(5)
+
+# 6. Time-Based Aggregation: Requests per Hour
+from pyspark.sql.functions import window
+
+requests_per_hour_df = cleaned_logs_df.groupBy(window('timestamp', '1 hour')).count().orderBy('window')
+requests_per_hour_df.show(truncate=False)
+
+# 7. Save Outputs in Delta Format
+cleaned_logs_df.write.mode('overwrite').format("delta").save("dbfs:/FileStore/cleaned_logs_delta")
+status_counts_df.write.mode('overwrite').format("delta").save("dbfs:/FileStore/status_counts_delta")
+url_size_df.write.mode('overwrite').format("delta").save("dbfs:/FileStore/url_sizes_delta")
+
+# 8. Small Validation Tests (Data Quality)
+assert cleaned_logs_df.filter(col("timestamp").isNull()).count() == 0, "Null timestamps found!"
+assert cleaned_logs_df.filter(col("ip") == '').count() == 0, "Empty IP addresses found!"
+print("Data validation checks passed ✅")
